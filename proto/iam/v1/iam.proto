@@ -1,0 +1,105 @@
+// iam/v1 — the nIAM STS gRPC surface ("the internal fast lane").
+//
+// The HTTP OAuth2 endpoints (RFC 6749/7662/7009/8693) remain the CANONICAL,
+// conformance surface and are never replaced. This service is an additive,
+// typed transport for the machine-to-machine hot paths: introspection,
+// policy decisions and key distribution. Every method is a thin adapter over
+// the exact same STS service logic the HTTP endpoints use.
+//
+// AuthN model (v1):
+//   • Introspect — the caller authenticates as a service account via gRPC
+//     metadata `x-client-id` / `x-client-secret` (same credentials the
+//     HTTP introspection endpoint accepts). Ownership rules are identical:
+//     a client may introspect its own tokens or tokens for APIs it is the
+//     resource server of.
+//   • Decide     — the token itself is the credential (matches HTTP
+//     POST /authz/decision).
+//   • GetJWKS    — public key material only (matches HTTP GET /jwks).
+//
+// Transport hardening for later (documented, not implemented here):
+//   • mTLS on the channel (RFC 8705 client certs) instead of credentials in
+//     metadata,
+//   • server-streaming GetJWKS → push on key rotation instead of polling,
+//   • Revoke / Exchange methods once delegation + revocation fan-out arrive.
+//
+// Contract language: Protocol Buffers (proto3). Regenerate stubs for any
+// language with protoc + the standard generators; the demo uses
+// @grpc/proto-loader for runtime loading (no codegen step).
+
+syntax = "proto3";
+
+package iam.v1;
+
+service IamService {
+  // RFC 7662 token introspection — typed twin of POST /oauth2/introspect.
+  rpc Introspect(IntrospectRequest) returns (IntrospectResponse);
+
+  // PDP decision — typed twin of POST /authz/decision. Required scope is
+  // either explicit (`required_scope`) or derived as "{resource}:{action}".
+  rpc Decide(DecideRequest) returns (DecideResponse);
+
+  // RFC 7517 JWKS for a tenant (active + retiring signing keys).
+  rpc GetJWKS(GetJWKSRequest) returns (GetJWKSResponse);
+}
+
+message IntrospectRequest {
+  string token = 1;
+}
+
+message IntrospectResponse {
+  bool active = 1;
+  string scope = 2;
+  string client_id = 3;
+  string sub = 4;
+  string aud = 5;
+  string iss = 6;
+  string tenant = 7;
+  int64 exp = 8;
+  int64 iat = 9;
+  string jti = 10;
+  string token_type = 11;
+}
+
+message DecideRequest {
+  string token = 1;
+  string resource = 2;
+  string action = 3;
+  string required_scope = 4;
+  // Optional environment attributes for attribute-based policy evaluation
+  // (e.g. "ip", "method", "time") — the tenant's policies may condition on
+  // subject.* (token claims), resource, action, and env.* attributes.
+  map<string, string> attributes = 5;
+}
+
+message DecideResponse {
+  string decision = 1;   // "permit" | "deny"
+  string reason = 2;
+  string required_scope = 3;
+  string subject = 4;    // client_id of the token holder
+  string tenant = 5;
+  string scope = 6;      // scopes the token actually carries
+}
+
+message GetJWKSRequest {
+  string tenant = 1;
+}
+
+message GetJWKSResponse {
+  string tenant = 1;
+  repeated JWK keys = 2;
+}
+
+// A single JWK (RFC 7517). RSA keys populate n/e, EC keys populate crv/x/y.
+message JWK {
+  string kid = 1;
+  string kty = 2;
+  string alg = 3;
+  string use = 4;
+  string n = 5;
+  string e = 6;
+  string crv = 7;
+  string x = 8;
+  string y = 9;
+  // The full JWK serialized as JSON — preserves any future fields verbatim.
+  string json = 10;
+}

@@ -1,0 +1,24 @@
+{
+  "name": "niam-microservices-demo",
+  "version": "1.0.0",
+  "description": "Two independent ElysiaJS microservices consuming the nIAM STS as an external IAM provider (HTTP + gRPC). Pure wire clients — no IAM internals.",
+  "private": true,
+  "scripts": {
+    "demo:payments": "bun run payments-svc.ts",
+    "demo:orders": "bun run orders-svc.ts",
+    "demo:run": "bun run run.ts",
+    "demo:test": "bun test demo.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.5",
+    "@grpc/proto-loader": "^0.8.1",
+    "elysia": "^1.4.29",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/jsonwebtoken": "^9.0.10",
+    "typescript": "latest"
+  }
+}
