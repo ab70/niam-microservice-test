@@ -1,3 +1,6 @@
 node_modules/
 .demo-credentials.json
 *.log
+
+# hr-software local sqlite database (dev artifact)
+hr-software/data/

@@ -1,6 +1,19 @@
-# nIAM-Microservices-Demo — two independent microservices consuming nIAM
+# nIAM-Microservices-Demo — the nIAM consumer/demo apps
 
-This project is a **pure consumer** of the nIAM STS. It contains two
+This repo hosts **all the demo apps** that consume nIAM as an **external IAM
+provider** — one repo for the whole demo suite:
+
+| App | What it is | Port | IAM feature it proves |
+|---|---|---|---|
+| `orders-svc` / `payments-svc` | two independent microservices (pure wire clients) | :4100 / :4101 | machine-to-machine IAM: `client_credentials`, local JWKS validation, scopes, introspection, revocation, exchange, gRPC |
+| `hr-software/` | an HR management app | :3456 | **human** SSO: nIAM as an OIDC provider (`authorization_code` + PKCE), plus niam-logger staff sync + nIAM webhook |
+
+Everything below (unless noted) is about the microservices demo. The HR app
+has its own section at the bottom.
+
+## Microservices demo — two independent services consuming nIAM
+
+This part is a **pure consumer** of the nIAM STS. It contains two
 **independent ElysiaJS microservices** (`orders-svc`, `payments-svc`) that treat
 nIAM as an **external IAM provider**:
 
@@ -144,16 +157,58 @@ nIAM-Microservices-Demo/
 ├── run.ts                     ← one-shot orchestrated demo (12 scenarios)
 ├── demo.test.ts               ← end-to-end automated test (15 tests)
 ├── proto/iam/v1/iam.proto     ← gRPC contract (proto3) — client-side copy
-└── lib/
-    ├── niam.ts                ← STS HTTP client: token, introspect, revoke, exchange
-    │                             + local JWKS verifier (the reusable piece)
-    ├── niamGrpc.ts            ← typed gRPC client (iam.v1) — the "later" twin
-    └── niamMiddleware.ts      ← Elysia requireScope() middleware (local JWT check)
+├── lib/
+│   ├── niam.ts                ← STS HTTP client: token, introspect, revoke, exchange
+│   │                             + local JWKS verifier (the reusable piece)
+│   ├── niamGrpc.ts            ← typed gRPC client (iam.v1) — the "later" twin
+│   └── niamMiddleware.ts      ← Elysia requireScope() middleware (local JWT check)
+└── hr-software/               ← HR demo app (OIDC SSO client of nIAM) — own project
+    ├── src/index.ts           ← routes: login, dashboard, staff CRUD, SSO, webhook
+    ├── src/db.ts              ← bun:sqlite schema + seeded admin (data/hr.db, gitignored)
+    ├── src/auth.ts            ← local session store (staff vs admin)
+    ├── src/sync.ts            ← pushes EMPLOYEE webhooks to niam-logger
+    ├── src/views/             ← HTML page templates
+    └── docs/NIAM_OIDC_SSO_INTEGRATION.md
 ```
 
 IAM-side counterparts live in `elysia_niam/`: `src/app/services/sts/grpc/`
 (the gRPC surface), `scripts/demo-provision.ts` (the provisioning seed), and
-`test/adminApi.test.ts` (the admin HTTP API regression test).
+`test/oauth2_full.test.ts` (the STS + admin HTTP API regression suite).
+
+## The HR software demo — nIAM as an OIDC provider (`hr-software/`)
+
+`hr-software/` is a standalone ElysiaJS **HR management app** (Bun + SQLite,
+`bun:sqlite` at `hr-software/data/hr.db`, seeded admin `admin@admin.com` /
+`12345678`). It lives in this repo because it is another demo consumer of
+nIAM — but on the **human side**: instead of machine credentials it does
+**OIDC SSO** against nIAM as the identity provider.
+
+What it demonstrates:
+
+- **OIDC authorization_code + PKCE (RFC 7636)** — `GET /auth/niam/login`
+  builds the authorize URL (state/nonce/PKCE), `/callback` exchanges the code
+  at nIAM's token endpoint, verifies state + nonce + issuer, and creates a
+  local session from the ID-token claims (`client_id`/`secret`/issuer/db
+  configurable via env — see `src/index.ts`);
+- **niam-logger sync** — staff add/edit/delete push `EMPLOYEE` webhooks to
+  `niam-logger` (`NIAM_LOGGER_URL`, default `http://localhost:4001`);
+- **nIAM webhook** — `POST /api/webhook` accepts `add_User`/`del_User`
+  notifications from nIAM (guarded by `x-hr-auth`);
+- **staff management UI** — add/edit/delete staff, Excel bulk upload (`xlsx`).
+
+Run it:
+
+```bash
+bun run hr:dev        # :3456  (hot reload)
+bun run hr:start      # :3456  (no reload)
+# or from inside the folder: cd hr-software && bun run dev
+```
+
+Prerequisites for full SSO: the nIAM backend running, an OIDC SSO system
+configured in the nIAM-Frontend org (the defaults in `src/index.ts` target the
+`niamTest` tenant), and `niam-logger` if you want the staff-sync webhooks.
+See `hr-software/docs/NIAM_OIDC_SSO_INTEGRATION.md` for the integration
+analysis.
 
 ## Reusing this in your own services
 

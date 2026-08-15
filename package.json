@@ -8,6 +8,8 @@
     "demo:orders": "bun run orders-svc.ts",
     "demo:run": "bun run run.ts",
     "demo:test": "bun test demo.test.ts",
+    "hr:dev": "bun run --cwd hr-software dev",
+    "hr:start": "bun run --cwd hr-software start",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

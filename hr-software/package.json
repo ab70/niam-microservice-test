@@ -1,0 +1,18 @@
+{
+  "name": "hr-software",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --hot src/index.ts",
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "elysia": "^1.2.0",
+    "@elysiajs/cookie": "^0.8.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.12",
+    "typescript": "^5.0.0"
+  }
+}
