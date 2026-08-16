@@ -238,6 +238,11 @@ const app = new Elysia()
     const existing = db.query("SELECT id, email FROM staff WHERE id = ?").get(id) as any;
     if (!existing) return redirect("/dashboard");
 
+    // Email is the sync identity across hr-software → niam-logger → nIAM.
+    // A rename via edit would break the whole chain (nIAM can't find the user
+    // under the new email) — pin it to the existing record.
+    data.email = existing.email;
+
     const setClause = fields.map((f) => `${f} = ?`).join(", ");
     const values = fields.map((f) => data[f] || "");
     const active = data.active === "1" || data.active === "true" || data.active === "on" ? 1 : 0;
@@ -246,11 +251,14 @@ const app = new Elysia()
       db.query(`UPDATE staff SET ${setClause}, active = ?, updatedAt = datetime('now') WHERE id = ?`)
         .run(...values, active, id);
 
-      // Push UPDATE to niam-logger
+      // Push UPDATE to niam-logger — every column, empties included, so cleared
+      // fields propagate and the nIAM policy reconcile revokes what the new
+      // attributes no longer justify (empty dates are dropped in sync.ts).
       const staffPayload: any = { email: existing.email };
       fields.forEach((f, i) => {
-        if (values[i]) staffPayload[f] = values[i];
+        staffPayload[f] = values[i];
       });
+      staffPayload.email = existing.email;
       pushStaffToNiamLogger([staffPayload], "UPDATE");
     } catch (err: any) {
       console.error("[staff/edit] error:", err.message);

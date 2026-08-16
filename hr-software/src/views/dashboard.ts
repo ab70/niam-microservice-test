@@ -387,8 +387,12 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
             <input type="text" name="lastName" id="edit-lastName" required />
           </div>
           <div class="field">
+            <label>Nick Name</label>
+            <input type="text" name="nick_Name" id="edit-nick_Name" />
+          </div>
+          <div class="field">
             <label>Email *</label>
-            <input type="email" name="email" id="edit-email" required />
+            <input type="email" name="email" id="edit-email" required readonly title="Email is the sync identity and cannot be changed" />
           </div>
           <div class="field">
             <label>Phone</label>
@@ -397,6 +401,10 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
           <div class="field">
             <label>Employee ID</label>
             <input type="text" name="employee_Id" id="edit-employee_Id" />
+          </div>
+          <div class="field">
+            <label>UID</label>
+            <input type="text" name="uid" id="edit-uid" />
           </div>
           <div class="field">
             <label>Department</label>
@@ -411,12 +419,24 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
             <input type="text" name="office" id="edit-office" />
           </div>
           <div class="field">
+            <label>Joining Date</label>
+            <input type="date" name="joining_Date" id="edit-joining_Date" />
+          </div>
+          <div class="field">
+            <label>Effective Date</label>
+            <input type="date" name="effective_Date" id="edit-effective_Date" />
+          </div>
+          <div class="field">
             <label>Division</label>
             <input type="text" name="division" id="edit-division" />
           </div>
           <div class="field">
             <label>Section</label>
             <input type="text" name="section" id="edit-section" />
+          </div>
+          <div class="field">
+            <label>Sub Section</label>
+            <input type="text" name="sub_Section" id="edit-sub_Section" />
           </div>
           <div class="field">
             <label>Band</label>
@@ -433,6 +453,10 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
           <div class="field">
             <label>Supervisor Email</label>
             <input type="email" name="supervisor" id="edit-supervisor" />
+          </div>
+          <div class="field">
+            <label>Supervisor Name</label>
+            <input type="text" name="supervisorName" id="edit-supervisorName" />
           </div>
           <div class="field">
             <label>Status</label>

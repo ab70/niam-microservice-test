@@ -42,6 +42,33 @@ export interface StaffPayload {
   allAccess?: any[];
 }
 
+// niam-logger's webhook schema validates joining_Date/effective_Date as ISO
+// datetimes (z.string().datetime()). HTML date inputs send "YYYY-MM-DD" and a
+// cleared field sends "" — BOTH fail the parse, and webHook_Controller's
+// fallback silently downgrades the envelope to action=ADD (an UPDATE becomes a
+// no-op "User already there" failure). Normalize before pushing.
+const DATE_FIELDS = ["joining_Date", "effective_Date"];
+
+export function normalizeStaff(staff: StaffPayload[]): StaffPayload[] {
+  return staff.map((s) => {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(s)) {
+      if (DATE_FIELDS.includes(k)) {
+        if (!v) continue; // empty date — drop, the schema rejects ""
+        if (typeof v === "string" && !v.includes("T")) {
+          const d = new Date(v);
+          out[k] = isNaN(d.getTime()) ? v : d.toISOString(); // invalid dates pass through rather than throw
+        } else {
+          out[k] = v;
+        }
+      } else {
+        out[k] = v;
+      }
+    }
+    return out as StaffPayload;
+  });
+}
+
 export async function pushStaffToNiamLogger(staff: StaffPayload[], action: WebhookAction = "ADD") {
   try {
     const url = `${NIAM_LOGGER_URL}/niam/worker/webhook`;
@@ -49,7 +76,7 @@ export async function pushStaffToNiamLogger(staff: StaffPayload[], action: Webho
     const payload = {
       type: "EMPLOYEE",
       action,
-      data: staff,
+      data: normalizeStaff(staff),
     };
 
     console.log(`[sync] ──── REQUEST ────`);
