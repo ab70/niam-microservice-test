@@ -1,10 +1,16 @@
 /**
- * Push staff data to niam-logger's webhook endpoint.
+ * Push staff data and leave events to niam-logger's webhook endpoint.
  *
  * niam-logger expects:
  *   POST /niam/worker/webhook
  *   Headers: x-tenant-id (encrypted), x-signature (optional)
- *   Body: { type: "EMPLOYEE", action: "ADD"|"UPDATE"|"REMOVE", data: [ { ...staff fields } ] }
+ *
+ * Employee body:
+ *   { type: "EMPLOYEE", action: "ADD"|"UPDATE"|"REMOVE", data: [ { ...staff fields } ] }
+ *
+ * Leave body:
+ *   { type: "LEAVE", action: "ADD"|"UPDATE"|"REMOVE",
+ *     data: { userId: "email", leaveStart: "ISO", leaveEnds: "ISO", actingUser: "email"? } }
  *
  * For local dev we skip the encryption/signature — the webhook middleware
  * has a DEV_MODE bypass. In production you'd encrypt the tenant DB name
@@ -108,6 +114,76 @@ export async function pushStaffToNiamLogger(staff: StaffPayload[], action: Webho
     console.error(`[sync] Failed to push to niam-logger (${action}):`, err.message);
     console.error(`[sync] ──────────────`);
     // Non-blocking — don't fail the operation just because sync failed
+    return { success: false, message: err.message };
+  }
+}
+
+// ── Leave payload ─────────────────────────────────────────────────
+export interface LeavePayload {
+  userId: string;        // email of person on leave
+  leaveStart: string;    // ISO datetime
+  leaveEnds: string;     // ISO datetime
+  actingUser?: string;   // email of deputy (optional)
+}
+
+export type LeaveAction = "ADD" | "UPDATE" | "REMOVE";
+
+/**
+ * Normalize leave dates to ISO datetime strings.
+ * Accepts "YYYY-MM-DD" (from date inputs) or empty strings.
+ */
+function normalizeLeaveDate(dateStr: string): string {
+  if (!dateStr) return "";
+  if (dateStr.includes("T")) return dateStr; // already ISO
+  const d = new Date(dateStr);
+  return isNaN(d.getTime()) ? dateStr : d.toISOString();
+}
+
+/**
+ * Push a leave event to niam-logger's webhook.
+ * Works for ADD (create leave), UPDATE (change dates/deputy), and REMOVE (delete leave).
+ */
+export async function pushLeaveToNiamLogger(
+  leave: LeavePayload,
+  action: LeaveAction = "ADD"
+) {
+  try {
+    const url = `${NIAM_LOGGER_URL}/niam/worker/webhook`;
+
+    const payload = {
+      type: "LEAVE",
+      action,
+      data: {
+        userId: leave.userId,
+        leaveStart: normalizeLeaveDate(leave.leaveStart),
+        leaveEnds: normalizeLeaveDate(leave.leaveEnds),
+        ...(leave.actingUser && { actingUser: leave.actingUser }),
+      },
+    };
+
+    console.log(`[sync] ──── LEAVE REQUEST ────`);
+    console.log(`[sync] URL:    ${url}`);
+    console.log(`[sync] Body:   `, JSON.stringify(payload, null, 2));
+    console.log(`[sync] ──────────────────────`);
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-tenant-id": TENANT_ID,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+
+    console.log(`[sync] ──── LEAVE RESPONSE ────`);
+    console.log(`[sync] Status: ${res.status} ${res.statusText}`);
+    console.log(`[sync] Body:   `, JSON.stringify(body, null, 2));
+    console.log(`[sync] ───────────────────────`);
+    return body;
+  } catch (err: any) {
+    console.error(`[sync] Failed to push leave to niam-logger (${action}):`, err.message);
     return { success: false, message: err.message };
   }
 }

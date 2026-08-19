@@ -20,7 +20,7 @@ import { loginPage } from "./views/login";
 import { dashboardPage } from "./views/dashboard";
 import { staffDashboardPage } from "./views/staffDashboard";
 import { errorPage } from "./views/error";
-import { pushStaffToNiamLogger } from "./sync";
+import { pushStaffToNiamLogger, pushLeaveToNiamLogger } from "./sync";
 import xlsx from "xlsx";
 
 // ── NIAM OIDC SSO Configuration (from ASDF system config) ───────────
@@ -287,6 +287,36 @@ const app = new Elysia()
       } catch (err: any) {
         console.error("[staff/delete] error:", err.message);
       }
+    }
+
+    return redirect("/dashboard");
+  })
+
+  // ─── Protected: Create Leave ────────────────────────────────────
+  .post("/staff/leave", async ({ request, body, redirect }) => {
+    const user = resolveUser(request);
+    if (!user) return redirect("/login");
+
+    const data = body as Record<string, string>;
+    const { userId, actingUser, leaveStart, leaveEnds } = data;
+
+    if (!userId || !leaveStart || !leaveEnds) {
+      return redirect("/dashboard");
+    }
+
+    try {
+      // Push LEAVE ADD to niam-logger → nIAM Leave collection
+      const result = await pushLeaveToNiamLogger({
+        userId,        // email of person on leave
+        leaveStart,    // date string
+        leaveEnds,     // date string
+        actingUser: actingUser || undefined,  // email of deputy
+      }, "ADD");
+
+      console.log(`[staff/leave] Leave created for ${userId}: ${leaveStart} → ${leaveEnds}, acting: ${actingUser || "none"}`);
+      console.log(`[staff/leave] niam-logger response:`, JSON.stringify(result));
+    } catch (err: any) {
+      console.error("[staff/leave] error:", err.message);
     }
 
     return redirect("/dashboard");

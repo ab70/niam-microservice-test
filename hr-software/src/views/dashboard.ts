@@ -196,6 +196,7 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
       <div class="tab active" onclick="switchTab('list', this)">📋 Staff List</div>
       <div class="tab" onclick="switchTab('add', this)">➕ Add Staff</div>
       <div class="tab" onclick="switchTab('upload', this)">📤 Excel Upload</div>
+      <div class="tab" onclick="switchTab('leave', this)">🏖️ Leave</div>
     </div>
 
     <!-- Flash messages -->
@@ -366,9 +367,41 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
         </form>
       </div>
     </div>
-  </div>
+  </div>    <!-- Panel: Leave Management -->
+    <div class="panel" id="panel-leave">
+      <div class="card">
+        <h2>Create Employee Leave</h2>
+        <p style="color:#64748b; font-size:.85rem; margin-bottom:20px">
+          Create a leave record. This will sync to nIAM and the employee's approvals
+          will be handled by the acting user during the leave period.
+        </p>
+        <form method="POST" action="/staff/leave">
+          <div class="form-grid">
+            <div class="field">
+              <label>Employee Email *</label>
+              <input type="email" name="userId" required placeholder="employee@company.com" />
+            </div>
+            <div class="field">
+              <label>Acting User Email (Deputy)</label>
+              <input type="email" name="actingUser" placeholder="deputy@company.com" />
+            </div>
+            <div class="field">
+              <label>Leave Start Date *</label>
+              <input type="date" name="leaveStart" required />
+            </div>
+            <div class="field">
+              <label>Leave End Date *</label>
+              <input type="date" name="leaveEnds" required />
+            </div>
+          </div>
+          <div style="margin-top: 16px;">
+            <button type="submit" class="btn btn-primary">🏖️ Create Leave</button>
+          </div>
+        </form>
+      </div>
+    </div>
 
-  <!-- Edit Staff Modal -->
+    <!-- Edit Staff Modal -->
   <div class="modal-overlay" id="edit-modal" onclick="if(event.target===this) closeEdit()">
     <div class="modal">
       <div class="modal-head">
