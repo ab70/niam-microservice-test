@@ -7,7 +7,6 @@
  *
  * Prerequisites (IAM side):
  *   • backend on :4000   (elysia_niam: bun run dev)      — override NIAM_BASE
- *   • gRPC surface :50051 (elysia_niam: bun run grpc)     — override GRPC_ADDR
  *   • credentials provisioned (elysia_niam: bun run demo-provision)
  */
 import { test, expect, beforeAll, afterAll } from "bun:test";
@@ -15,7 +14,6 @@ import fs from "node:fs";
 import path from "node:path";
 import jwt from "jsonwebtoken";
 import { fetchJson, NiamTokenClient, demoConfig } from "./lib/niam";
-import { NiamGrpcClient } from "./lib/niamGrpc";
 import { buildPaymentsApp } from "./payments-svc";
 import { buildOrdersApp } from "./orders-svc";
 
@@ -63,23 +61,6 @@ beforeAll(async () => {
     client_Id: creds.services["orders-svc"].client_Id,
     client_Secret: creds.services["orders-svc"].client_Secret,
   });
-
-  // The gRPC surface runs IAM-side on :50051 (GRPC_ADDR). Probe it up-front
-  // with a public GetJWKS call; payments/orders resolve the address from
-  // GRPC_ADDR at build time below.
-  const probe = new NiamGrpcClient({
-    client_Id: creds.services["orders-svc"].client_Id,
-    client_Secret: creds.services["orders-svc"].client_Secret,
-  });
-  try {
-    await probe.getJwks(demoConfig.tenant);
-    probe.close();
-  } catch (e: any) {
-    probe.close();
-    throw new Error(
-      `nIAM gRPC surface not reachable at ${probe.address}. Start it (cd ../elysia_niam && bun run grpc) or set GRPC_ADDR.`
-    );
-  }
 
   payments = buildPaymentsApp().listen(0);
   paymentsUrl = `http://localhost:${payments.server?.port}`;
@@ -218,51 +199,14 @@ test("orders-svc can delegate with a token exchange (act claim, sub preserved)",
   expect(r.json.exchanged_token.scope).toBe("payments:charge");
 });
 
-// ─── 8. The gRPC surface (additive "internal fast lane", iam.v1) ───────────
-test("gRPC introspection is the typed twin of RFC 7662 (active + claims)", async () => {
-  // Fresh client: the revocation test above revokes the shared cached token,
-  // so a new token (not the revoked one) proves the happy path.
-  const fresh = new NiamTokenClient({
-    client_Id: creds.services["orders-svc"].client_Id,
-    client_Secret: creds.services["orders-svc"].client_Secret,
-  });
-  const token = await fresh.getToken({ scope: "payments:charge", audience: demoConfig.audience });
-  const r = await fetchJson(`${paymentsUrl}/payments/grpc-introspect`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
-  expect(r.json.transport).toBe("grpc (iam.v1)");
-  expect(r.json.introspection.active).toBe(true);
-  expect(r.json.introspection.sub).toMatch(/^svc_orders_svc_/);
-  expect(r.json.introspection.scope).toBe("payments:charge");
-  expect(r.json.introspection.tenant).toBe(demoConfig.tenant);
-  expect(r.json.introspection.exp).toBeTruthy();
-});
-
-test("gRPC introspection rejects a caller that cannot authenticate (UNAUTHENTICATED)", async () => {
-  const token = await sts.getToken({ scope: "payments:charge", audience: demoConfig.audience });
-  const imposter = new NiamGrpcClient({
-    client_Id: "svc_imposter_0000",
-    client_Secret: "not-a-real-secret",
-  });
-  try {
-    await imposter.introspect(token);
-    expect.unreachable("imposter should not introspect");
-  } catch (err: any) {
-    expect(err.code).toBe(16); // grpc.status.UNAUTHENTICATED
-  } finally {
-    imposter.close();
-  }
-});
-
-test("gRPC Decide is the typed PDP: permit charge, deny refund, carries subject/tenant", async () => {
-  const r = await fetchJson(`${ordersUrl}/orders/grpc-decision`, {
+// ─── 8. HTTP PDP surface (the canonical decision endpoint) ─────────────────
+test("PDP decision over HTTP: permit charge, deny refund, carries subject/tenant", async () => {
+  const r = await fetchJson(`${ordersUrl}/orders/decision`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
-  expect(r.json.transport).toBe("grpc (iam.v1)");
+  expect(r.json.transport).toBe("http (/authz/decision)");
   const charge = r.json.decisions["payments:charge"];
   const refund = r.json.decisions["payments:refund"];
   expect(charge.decision).toBe("permit");
@@ -271,21 +215,4 @@ test("gRPC Decide is the typed PDP: permit charge, deny refund, carries subject/
   expect(charge.tenant).toBe(demoConfig.tenant);
   expect(refund.decision).toBe("deny");
   expect(refund.reason).toContain("payments:refund");
-});
-
-test("gRPC GetJWKS returns the same signing keys as the HTTP JWKS", async () => {
-  const grpcClient = new NiamGrpcClient({
-    client_Id: creds.services["orders-svc"].client_Id,
-    client_Secret: creds.services["orders-svc"].client_Secret,
-  });
-  const grpcJwks = await grpcClient.getJwks(demoConfig.tenant);
-  grpcClient.close();
-  const httpJwks = await fetchJson(
-    `${demoConfig.baseUrl}/t/${demoConfig.tenant}/oauth2/jwks`
-  );
-  const kids = (keys: any[]) => keys.map((k: any) => k.kid).sort();
-  expect(kids(grpcJwks.keys)).toEqual(kids(httpJwks.json.keys));
-  expect(grpcJwks.keys[0].kid).toBeTruthy();
-  expect(grpcJwks.keys[0].kty).toBeTruthy();
-  expect(grpcJwks.keys[0].json).toBeTruthy();
 });

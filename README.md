@@ -5,7 +5,7 @@ provider** — one repo for the whole demo suite:
 
 | App | What it is | Port | IAM feature it proves |
 |---|---|---|---|
-| `orders-svc` / `payments-svc` | two independent microservices (pure wire clients) | :4100 / :4101 | machine-to-machine IAM: `client_credentials`, local JWKS validation, scopes, introspection, revocation, exchange, gRPC |
+| `orders-svc` / `payments-svc` | two independent microservices (pure wire clients) | :4100 / :4101 | machine-to-machine IAM: `client_credentials`, local JWKS validation, scopes, introspection, revocation, exchange |
 | `hr-software/` | an HR management app | :3456 | **human** SSO: nIAM as an OIDC provider (`authorization_code` + PKCE), plus niam-logger staff sync + nIAM webhook |
 
 Everything below (unless noted) is about the microservices demo. The HR app
@@ -18,7 +18,7 @@ This part is a **pure consumer** of the nIAM STS. It contains two
 nIAM as an **external IAM provider**:
 
 - they **never import IAM code** (no nIAM models, services or Mongo access) —
-  everything goes over the wire (HTTP OAuth2 + gRPC `iam.v1`);
+  everything goes over the wire (HTTP OAuth2);
 - they are a **separate project** from `elysia_niam/` on purpose: the same way
   any customer service in any language would consume the provider;
 - the only IAM-side prerequisite is that the STS (and its service accounts) are
@@ -35,8 +35,9 @@ What the demo proves, end to end:
 - **authorization** — scopes are enforced per route (least privilege);
 - **lifecycle** — token introspection (RFC 7662), revocation (RFC 7009), and
   token exchange / delegation (RFC 8693, `act` claim);
-- **dual transport** — the same IAM operations are also available over the
-  typed gRPC surface (`iam.v1`), as an additive "internal fast lane".
+- **PDP decisions** — `/authz/decision` answers "may this token perform
+  {action} on {resource}?" (permit/deny + reason) when a route needs more than
+  a static scope check.
 
 ## Architecture
 
@@ -44,7 +45,7 @@ What the demo proves, end to end:
                     ┌──────────────────────────────────────────────────┐
                     │            nIAM STS (elysia_niam :4000)         │
                     │  /t/niam-demo/oauth2/{token,introspect,revoke, │
-                    │  jwks,.well-known}   ··· plus gRPC iam.v1 :50051│
+                    │  jwks,.well-known}  ···  /authz/decision (PDP)  │
                     └───────▲──────────────────▲──────────────────────┘
                             │ ① client_creds  │ ⑥ introspection/revocation
                             │  (rare)         │  (only when asked)
@@ -59,26 +60,18 @@ What the demo proves, end to end:
                                    │     no call to nIAM)
                                    ▼
                             scope check → allow / deny
-        ┌───────────────────────────────────────────────────────────┐
-        │ ⑦ gRPC fast lane (IAM-side): Introspect · Decide ·        │
-        │    GetJWKS — typed protobuf twins of the HTTP endpoints   │
-        └───────────────────────────────────────────────────────────┘
 ```
 
 Hot path (every request): **steps ②→③ only**. nIAM sees a token request once
 per service per ~10 minutes, and a JWKS fetch once per service per ~30 minutes.
-The gRPC surface (⑦) is optional — services adopt it by swapping the HTTP
-client for the typed `iam.v1` client; nothing changes for services that stay
-on HTTP.
+The PDP decision endpoint is opt-in per route — services that only need scope
+checks never call it.
 
 ## Prerequisites (all IAM-side)
 
 1. nIAM backend running — `cd ../elysia_niam && bun run dev` (default
    `http://localhost:4000`, override `NIAM_BASE`).
-2. nIAM gRPC surface running — `cd ../elysia_niam && bun run grpc`
-   (default `127.0.0.1:50051`, override `GRPC_ADDR`). Only needed for the
-   gRPC scenarios/tests.
-3. Service accounts provisioned by the IAM admin:
+2. Service accounts provisioned by the IAM admin:
    `cd ../elysia_niam && bun run demo-provision` — this registers the scopes
    and creates `orders-svc` + `payments-svc` in the `niam-demo` tenant, and
    writes the client credentials to `.demo-credentials.json` here (gitignored;
@@ -89,10 +82,9 @@ on HTTP.
 ## Run
 
 ```bash
-# 0. (IAM side) backend + gRPC + provisioning — see prerequisites above.
+# 0. (IAM side) backend + provisioning — see prerequisites above.
 
-# 1. One-shot end-to-end demo (boots both microservices, 12 scenarios,
-#    incl. gRPC introspection / decision / JWKS)
+# 1. One-shot end-to-end demo (boots both microservices, all scenarios)
 bun run demo:run
 
 # 2. Or run them as real long-running services in separate terminals
@@ -115,36 +107,27 @@ bun run demo:test
 | F | Introspection (RFC 7662) | `active: true` + full claims |
 | G | Revocation (RFC 7009) | STS reports `active: false` immediately; local validation still accepts until TTL (documented behavior) |
 | H | Token exchange (RFC 8693) | new token keeps `sub`, adds `act: { sub: svc_orders_svc_* }` |
-| I | **gRPC** introspection | typed `iam.v1` twin of RFC 7662 — `active: true` + claims over protobuf |
-| J | **gRPC** PDP decision | `Decide(payments:charge)` → `permit` (typed verdict) |
-| K | **gRPC** PDP decision | `Decide(payments:refund)` → `deny` with reason |
-| L | **gRPC** JWKS | same signing keys as the HTTP JWKS (typed `JWK` messages) |
+| I | PDP decision (HTTP) | `POST /authz/decision` `payments:charge` → `permit` |
+| J | PDP decision (HTTP) | `payments:refund` → `deny` with reason |
 
-## The gRPC surface — current vs later, and the standards
+## The decision surface — current vs later, and the standards
 
 The HTTP OAuth2 endpoints are **canonical** (their wire format is defined by
-RFC 6749/7662/7009/8693), so they are never replaced. The gRPC surface is an
-**additive internal fast lane** implemented IAM-side: the same IAM operations,
-typed with Protocol Buffers, for services that want binary transport,
-generated stubs in any language, and (later) server-streaming.
+RFC 6749/7662/7009/8693), so they are never replaced. The PDP decision
+endpoint (`/authz/decision`) is the attribute-based authorization surface:
+same IAM operations over plain HTTP+JSON — no extra transport to run.
 
-| | Current (HTTP) | Later (additive gRPC) |
+| | Current (HTTP) | Later |
 |---|---|---|
-| Token issuance | `POST /t/{tenant}/oauth2/token` (RFC 6749/8693) | stays HTTP — conformance surface |
-| Introspection | `POST /t/{tenant}/oauth2/introspect` | `Introspect(token)` → typed claims |
-| PDP decision | `POST /authz/decision` | `Decide(token, resource, action)` → permit/deny |
-| JWKS | `GET /t/{tenant}/oauth2/jwks` | `GetJWKS(tenant)` → typed keys (later: server-stream on rotation) |
-| Revocation / Exchange | HTTP (RFC 7009 / 8693) | v2: `Revoke` / `Exchange` methods |
+| Token issuance | `POST /t/{tenant}/oauth2/token` (RFC 6749/8693) | — |
+| Introspection | `POST /t/{tenant}/oauth2/introspect` | — |
+| PDP decision | `POST /authz/decision` | standalone PDP service (see `PING_PARITY_IMPLEMENTATION_GUIDE.md` IAM-side) |
+| JWKS | `GET /t/{tenant}/oauth2/jwks` | — |
+| Revocation / Exchange | HTTP (RFC 7009 / 8693) | — |
 
-**Standards later on:** everything above stays (the OAuth2 RFC family),
-plus **gRPC** (CNCF), **Protocol Buffers (proto3)** for contracts, and
-**mTLS (RFC 8705)** on the internal channel (the demo uses an insecure
-channel — see `grpcServer.ts` IAM-side). Optional roadmap: RFC 9068 (JWT
-access-token profile) and SPIFFE/SPIRE workload identity for mTLS.
-
-AuthN per method: `Introspect` authenticates the caller as a service account
-via gRPC metadata (identical to the HTTP endpoint); `Decide` trusts the
-presented token; `GetJWKS` is public key material.
+**Standards:** the OAuth2 RFC family plus **mTLS (RFC 8705)** for hardened
+channels. Optional roadmap: RFC 9068 (JWT access-token profile) and
+SPIFFE/SPIRE workload identity for mTLS.
 
 ## Files
 
@@ -154,13 +137,11 @@ nIAM-Microservices-Demo/
 ├── .demo-credentials.json     ← generated IAM-side, gitignored (secrets!)
 ├── payments-svc.ts            ← resource server (protects routes, introspects)
 ├── orders-svc.ts              ← caller (token client, calls payments)
-├── run.ts                     ← one-shot orchestrated demo (12 scenarios)
-├── demo.test.ts               ← end-to-end automated test (15 tests)
-├── proto/iam/v1/iam.proto     ← gRPC contract (proto3) — client-side copy
+├── run.ts                     ← one-shot orchestrated demo (all scenarios)
+├── demo.test.ts               ← end-to-end automated test
 ├── lib/
 │   ├── niam.ts                ← STS HTTP client: token, introspect, revoke, exchange
 │   │                             + local JWKS verifier (the reusable piece)
-│   ├── niamGrpc.ts            ← typed gRPC client (iam.v1) — the "later" twin
 │   └── niamMiddleware.ts      ← Elysia requireScope() middleware (local JWT check)
 └── hr-software/               ← HR demo app (OIDC SSO client of nIAM) — own project
     ├── src/index.ts           ← routes: login, dashboard, staff CRUD, SSO, webhook
@@ -171,9 +152,9 @@ nIAM-Microservices-Demo/
     └── docs/NIAM_OIDC_SSO_INTEGRATION.md
 ```
 
-IAM-side counterparts live in `elysia_niam/`: `src/app/services/sts/grpc/`
-(the gRPC surface), `scripts/demo-provision.ts` (the provisioning seed), and
-`test/oauth2_full.test.ts` (the STS + admin HTTP API regression suite).
+IAM-side counterparts live in `elysia_niam/`: `scripts/demo-provision.ts`
+(the provisioning seed) and `test/oauth2_full.test.ts` (the STS + admin HTTP
+API regression suite).
 
 ## The HR software demo — nIAM as an OIDC provider (`hr-software/`)
 
@@ -230,19 +211,3 @@ The verifier fetches discovery + JWKS once, caches for 10 minutes, and
 refreshes only when it sees an unknown `kid` (i.e. after key rotation) — so the
 per-request cost is a local RSA/EC signature check, ~20–80 µs, **zero network
 calls to nIAM**.
-
-To adopt the gRPC fast lane instead, swap the HTTP client for the typed one
-(`lib/niamGrpc.ts`, contract `proto/iam/v1/iam.proto`):
-
-```ts
-import { NiamGrpcClient } from "./lib/niamGrpc";
-
-const grpc = new NiamGrpcClient({ client_Id, client_Secret }); // same creds
-const res  = await grpc.introspect(token);                      // typed: { active, scope, sub, … }
-const v    = await grpc.decide({ token, resource: "payments", action: "charge" }); // { decision: "permit", … }
-const jwks = await grpc.getJwks(tenant);                        // typed keys
-```
-
-The `.proto` file generates equivalent stubs for any language (Go, Java,
-Python, Rust…), so every microservice gets the same typed contract regardless
-of its runtime.

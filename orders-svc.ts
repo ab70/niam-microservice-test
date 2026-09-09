@@ -18,7 +18,6 @@ import jwt from "jsonwebtoken";
 import fs from "node:fs";
 import path from "node:path";
 import { tracedCall, NiamTokenClient, demoConfig } from "./lib/niam";
-import { NiamGrpcClient } from "./lib/niamGrpc";
 
 export const ORDERS_PORT = Number(process.env.ORDERS_PORT || 4100);
 const CREDS_FILE = path.join(import.meta.dir, ".demo-credentials.json");
@@ -37,8 +36,6 @@ export const buildOrdersApp = () => {
   const paymentsUrl = (process.env.PAYMENTS_URL || `http://localhost:${process.env.PAYMENTS_PORT || 4101}`).replace(/\/$/, "");
   // orders-svc's STS identity — the ONLY secret it holds.
   const sts = new NiamTokenClient({ client_Id: me.client_Id, client_Secret: me.client_Secret });
-  // The same identity over the STS gRPC surface (IAM-side grpcServer, iam.v1).
-  const grpc = new NiamGrpcClient({ client_Id: me.client_Id, client_Secret: me.client_Secret });
 
   const callPayments = async (path: string, opts: { why: string; token?: string; body?: any }) => {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -107,20 +104,29 @@ export const buildOrdersApp = () => {
       }
     )
 
-    // RFC 8693 token exchange: orders-svc exchanges its own token for a
-    // delegated one — `sub` preserved, `act` = orders-svc, scope narrowed.
-    // This is how a service would act ON BEHALF of an upstream identity.
-    // gRPC PDP decision demo: orders-svc asks the STS gRPC surface whether
-    // its token may perform an action. Typed verdicts (permit/deny + reason)
-    // over a binary transport — the "internal fast lane" next to HTTP.
+    // HTTP PDP decision demo: orders-svc asks the STS /authz/decision
+    // endpoint whether its token may perform an action. Verdicts
+    // (permit/deny + reason) — the canonical wire surface.
     .post(
-      "/orders/grpc-decision",
+      "/orders/decision",
       async () => {
         const token = await sts.getToken({ scope: "payments:charge", audience: demoConfig.audience });
-        const charge = await grpc.decide({ token, resource: "payments", action: "charge" });
-        const refund = await grpc.decide({ token, resource: "payments", action: "refund" });
+        const decide = async (resource: string, action: string) => {
+          const r = await tracedCall(
+            `orders-svc asks the STS PDP: may ${resource}:${action}?`,
+            `${demoConfig.baseUrl}/authz/decision`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ resource, action }),
+            }
+          );
+          return r.json;
+        };
+        const charge = await decide("payments", "charge");
+        const refund = await decide("payments", "refund");
         return {
-          transport: "grpc (iam.v1)",
+          transport: "http (/authz/decision)",
           token_sub: (jwt.decode(token) as any)?.sub,
           decisions: {
             "payments:charge": charge,

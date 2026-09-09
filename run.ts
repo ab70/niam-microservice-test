@@ -15,21 +15,18 @@
  *        F. introspection   payments-svc asks the STS (RFC 7662)
  *        G. revocation      token revoked → STS says inactive (RFC 7009)
  *        H. token exchange  RFC 8693 delegation (`act` claim)
- *        I. gRPC introspect the same RFC 7662 check over the typed iam.v1 surface
- *        J. gRPC decision   PDP permit for payments:charge (typed verdict)
- *        K. gRPC decision   PDP deny for payments:refund
- *        L. gRPC JWKS       key set matches the HTTP JWKS
+ *        I. PDP decision    /authz/decision permit for payments:charge
+ *        J. PDP decision    /authz/decision deny for payments:refund
  *
  * This project is a PURE CONSUMER of the nIAM STS: it never imports IAM code
- * and talks only over the wire. Prerequisites: the nIAM backend (:4000) and
- * its gRPC surface (:50051) must be running, and the service-account
- * credentials must be provisioned (elysia_niam: `bun run demo-provision`).
+ * and talks only over the wire. Prerequisites: the nIAM backend (:4000) must
+ * be running, and the service-account credentials must be provisioned
+ * (elysia_niam: `bun run demo-provision`).
  */
 import jwt from "jsonwebtoken";
 import fs from "node:fs";
 import path from "node:path";
 import { tracedCall, NiamTokenClient, demoConfig, tokenEndpoint, jwksEndpoint } from "./lib/niam";
-import { NiamGrpcClient } from "./lib/niamGrpc";
 import { buildPaymentsApp, PAYMENTS_PORT } from "./payments-svc";
 import { buildOrdersApp, ORDERS_PORT } from "./orders-svc";
 
@@ -94,7 +91,7 @@ async function main() {
   const ordersCreds = saved.services["orders-svc"];
   const sts = new NiamTokenClient({ client_Id: ordersCreds.client_Id, client_Secret: ordersCreds.client_Secret });
 
-  // 2. Boot the two microservices (the gRPC surface runs IAM-side on :50051).
+  // 2. Boot the two microservices.
   console.log(`\n  ${BOLD}Booting microservices${RESET}`);
   const payments = buildPaymentsApp().listen(PAYMENTS_PORT);
   const paymentsUrl = `http://localhost:${payments.server?.port}`;
@@ -197,50 +194,18 @@ async function main() {
   check("exchanged token preserves sub", rH.json?.exchanged_token?.sub === rH.json?.original_token?.sub);
   check("exchanged token stamps act=orders-svc", rH.json?.exchanged_token?.act?.sub?.startsWith("svc_orders_svc_"), `act: ${JSON.stringify(rH.json?.exchanged_token?.act)}`);
 
-  // ── I–L. The gRPC surface (IAM-side, additive "internal fast lane") ─────
-  const grpcSts = new NiamGrpcClient({ client_Id: ordersCreds.client_Id, client_Secret: ordersCreds.client_Secret });
-
-  // The gRPC surface is part of the IAM (elysia_niam: `bun run grpc`).
-  try {
-    await grpcSts.getJwks(demoConfig.tenant);
-  } catch (e: any) {
-    console.error(`${RED}❌ nIAM gRPC surface not reachable at ${grpcSts.address}${RESET}`);
-    console.error(`   Start it from the IAM side: cd ../elysia_niam && bun run grpc  (or set GRPC_ADDR)`);
-    process.exit(1);
-  }
-  console.log(`  ${GREEN}✔${RESET} nIAM gRPC surface (iam.v1) reachable at ${grpcSts.address}\n`);
-
-  section("I. gRPC introspection — typed RFC 7662 twin of the HTTP call", "the same introspection over the additive gRPC surface (iam.v1) — typed protobuf fields instead of JSON");
-  // Fresh token: scenario G revoked the shared cached one (revocation is real).
-  const freshSts = new NiamTokenClient({ client_Id: ordersCreds.client_Id, client_Secret: ordersCreds.client_Secret });
-  const tokenI = await freshSts.getToken({ scope: "payments:charge", audience: demoConfig.audience });
-  const rI = await tracedCall(
-    "payments-svc runs the SAME introspection over the typed gRPC surface (iam.v1) instead of HTTP+JSON",
-    `${paymentsUrl}/payments/grpc-introspect`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: tokenI }) }
-  );
-  check("gRPC introspection reports active", rI.json?.introspection?.active === true, `transport: ${rI.json?.transport}`);
-  check("gRPC introspection is TYPED (sub + scope + client_id fields)", rI.json?.introspection?.sub?.startsWith("svc_orders_svc_") && rI.json?.introspection?.scope === "payments:charge", `sub: ${rI.json?.introspection?.sub}`);
-
-  section("J+K. gRPC PDP decision — typed permit/deny verdicts", "the PDP asks: may this token do {action} on {resource}? — permit for charge, deny for refund, with subject+tenant in the typed verdict");
+  // ── I–J. The HTTP PDP surface (/authz/decision) ─────────────────────────
+  section("I+J. PDP decision over HTTP — permit/deny verdicts", "the PDP asks: may this token do {action} on {resource}? — permit for charge, deny for refund, with subject+tenant in the verdict");
   const rJ = await tracedCall(
-    "orders-svc asks the STS gRPC surface (PDP Decide, iam.v1): may my token charge? may it refund? — typed permit/deny verdicts",
-    `${ordersUrl}/orders/grpc-decision`,
+    "orders-svc asks the STS PDP (/authz/decision): may my token charge? may it refund?",
+    `${ordersUrl}/orders/decision`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }
   );
   const dCharge = rJ.json?.decisions?.["payments:charge"];
   const dRefund = rJ.json?.decisions?.["payments:refund"];
-  check("gRPC Decide permits payments:charge", dCharge?.decision === "permit", `required_scope: ${dCharge?.required_scope}`);
-  check("gRPC Decide denies payments:refund", dRefund?.decision === "deny", dRefund?.reason || "");
-  check("gRPC verdicts carry subject + tenant (typed)", dCharge?.subject?.startsWith("svc_orders_svc_") && dCharge?.tenant === demoConfig.tenant);
-
-  section("L. gRPC JWKS — same key set as the HTTP JWKS", "key distribution over gRPC returns the SAME signing keys as the HTTP JWKS — either transport can feed local validation");
-  const grpcJwks = await grpcSts.getJwks(demoConfig.tenant);
-  const httpJwks = (await tracedCall("fetch the HTTP JWKS — compare its key set with the gRPC surface", jwksEndpoint())).json?.keys || [];
-  const kidsOf = (keys: any[]) => keys.map((k: any) => k.kid).sort();
-  check("gRPC GetJWKS matches the HTTP JWKS (same kids)", JSON.stringify(kidsOf(grpcJwks.keys)) === JSON.stringify(kidsOf(httpJwks)), `${grpcJwks.keys.length} key(s) via gRPC, ${httpJwks.length} via HTTP`);
-  check("gRPC JWK carries typed fields + full JSON", !!grpcJwks.keys[0]?.kid && !!grpcJwks.keys[0]?.kty && !!grpcJwks.keys[0]?.json);
-  grpcSts.close();
+  check("PDP permits payments:charge", dCharge?.decision === "permit", `required_scope: ${dCharge?.required_scope}`);
+  check("PDP denies payments:refund", dRefund?.decision === "deny", dRefund?.reason || "");
+  check("verdicts carry subject + tenant", dCharge?.subject?.startsWith("svc_orders_svc_") && dCharge?.tenant === demoConfig.tenant);
 
   // ── Summary ────────────────────────────────────────────────────────────
   console.log(`\n  ${BOLD}${passed} passed, ${failed} failed${RESET}`);
@@ -248,15 +213,16 @@ async function main() {
   console.log(`    ${DIM}token     ${tokenEndpoint()}${RESET}`);
   console.log(`    ${DIM}jwks      ${jwksEndpoint()}${RESET}`);
   console.log(`    ${DIM}introspect ${demoConfig.baseUrl}/t/${demoConfig.tenant}/oauth2/introspect${RESET}`);
-  console.log(`    ${DIM}revoke    ${demoConfig.baseUrl}/t/${demoConfig.tenant}/oauth2/revoke${RESET}`);    console.log(`    ${DIM}grpc      iam.v1 @ ${grpcSts.address} (proto/iam/v1/iam.proto, IAM-side)${RESET}`);
+  console.log(`    ${DIM}revoke    ${demoConfig.baseUrl}/t/${demoConfig.tenant}/oauth2/revoke${RESET}`);
+  console.log(`    ${DIM}pdp       ${demoConfig.baseUrl}/authz/decision${RESET}`);
   console.log(`  ${DIM}verified:${RESET}`);
   console.log(`    ${DIM}· connection       — a service authenticates to nIAM and receives a signed JWT (A, B)${RESET}`);
   console.log(`    ${DIM}· least privilege  — scopes enforced at the resource server (C)${RESET}`);
   console.log(`    ${DIM}· rejection        — no token (D) and tampered tokens (E) rejected locally${RESET}`);
   console.log(`    ${DIM}· lifecycle        — introspection (F) and revocation (G) work at the STS${RESET}`);
   console.log(`    ${DIM}· delegation       — token exchange preserves sub, stamps act (H)${RESET}`);
-  console.log(`    ${DIM}· gRPC fast lane   — typed introspect/decide/JWKS over iam.v1 (I–L)${RESET}`);
-  console.log(`\n  ${BOLD}IAM for microservices is working — over HTTP and gRPC.${RESET}\n`);
+  console.log(`    ${DIM}· pdp decisions    — permit/deny verdicts from /authz/decision (I–J)${RESET}`);
+  console.log(`\n  ${BOLD}IAM for microservices is working — over HTTP.${RESET}\n`);
 
   payments.stop();
   orders.stop();
