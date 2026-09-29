@@ -33,6 +33,8 @@ export interface StaffPayload {
   office?: string;
   joining_Date?: string;
   effective_Date?: string;
+  offboardEffectiveDate?: string;
+  reason?: string;
   division?: string;
   designation?: string;
   band?: string;
@@ -53,7 +55,7 @@ export interface StaffPayload {
 // cleared field sends "" — BOTH fail the parse, and webHook_Controller's
 // fallback silently downgrades the envelope to action=ADD (an UPDATE becomes a
 // no-op "User already there" failure). Normalize before pushing.
-const DATE_FIELDS = ["joining_Date", "effective_Date"];
+const DATE_FIELDS = ["joining_Date", "effective_Date", "offboardEffectiveDate"];
 
 export function normalizeStaff(staff: StaffPayload[]): StaffPayload[] {
   return staff.map((s) => {

@@ -112,14 +112,14 @@ const app = new Elysia()
 
   .get("/logout", ({ cookie: { session }, redirect }) => {
     const token = session.value;
-    if (token) destroySession(token);
+    if (typeof token === "string") destroySession(token);
     session.remove();
     return redirect("/login");
   })
 
   // ─── Protected: Dashboard ───────────────────────────────────────
   .get("/dashboard", ({ request, redirect }) => {
-    console.log("[route GET /dashboard] hit, cookie header:", request.headers.get?.("cookie") ?? request.headers?.cookie ?? "(none)");
+    console.log("[route GET /dashboard] hit, cookie header:", request.headers.get("cookie") ?? "(none)");
     const user = resolveUser(request);
     console.log("[route GET /dashboard] resolved user:", user ? user.email : null);
     if (!user) {
@@ -267,8 +267,8 @@ const app = new Elysia()
     return redirect("/dashboard");
   })
 
-  // ─── Protected: Delete Staff ─────────────────────────────────────
-  .post("/staff/delete/:id", async ({ request, params, redirect }) => {
+  // ─── Protected: Delete / Offboard Staff ───────────────────────────
+  .post("/staff/delete/:id", async ({ request, params, body, redirect }) => {
     const user = resolveUser(request);
     if (!user) return redirect("/login");
 
@@ -276,13 +276,20 @@ const app = new Elysia()
     if (Number.isFinite(id)) {
       // Get email before delete for sync
       const existing = db.query("SELECT id, email FROM staff WHERE id = ?").get(id) as any;
+      const data = (body || {}) as Record<string, string>;
+      const offboardEffectiveDate = data.offboardEffectiveDate || undefined;
+      const reason = data.reason || "Staff offboarded from HR software";
 
       try {
         db.query("DELETE FROM staff WHERE id = ?").run(id);
 
-        // Push REMOVE to niam-logger
+        // Push REMOVE to niam-logger with effective date and reason
         if (existing?.email) {
-          pushStaffToNiamLogger([{ email: existing.email }], "REMOVE");
+          pushStaffToNiamLogger([{
+            email: existing.email,
+            offboardEffectiveDate,
+            reason,
+          }], "REMOVE");
         }
       } catch (err: any) {
         console.error("[staff/delete] error:", err.message);

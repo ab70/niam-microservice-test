@@ -227,9 +227,7 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
                     <td>
                       <div class="row-actions">
                         <button class="btn-xs btn-edit" onclick='openEdit(${s.id})'>✏️ Edit</button>
-                        <form method="POST" action="/staff/delete/${s.id}" onsubmit="return confirm('Delete ${s.firstName} ${s.lastName}?')">
-                          <button type="submit" class="btn-xs btn-delete">🗑️ Delete</button>
-                        </form>
+                        <button type="button" class="btn-xs btn-delete" onclick="openOffboard(${s.id}, '${s.firstName} ${s.lastName}', '${s.email}')">👋 Offboard</button>
                       </div>
                     </td>
                   </tr>
@@ -511,6 +509,33 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
     </div>
   </div>
 
+  <!-- Offboard Staff Modal -->
+  <div class="modal-overlay" id="offboard-modal" onclick="if(event.target===this) closeOffboard()">
+    <div class="modal" style="max-width: 480px;">
+      <div class="modal-head">
+        <h2>Offboard Staff Member</h2>
+        <button class="close" type="button" onclick="closeOffboard()">&times;</button>
+      </div>
+      <form method="POST" id="offboard-form" action="/staff/delete/0">
+        <p style="font-size: 14px; color: #475569; margin-bottom: 16px;">
+          Offboarding <strong id="offboard-staff-name">Staff Member</strong> (<span id="offboard-staff-email">email</span>).
+        </p>
+        <div class="field" style="margin-bottom: 14px;">
+          <label>Offboarding Effective Date (Leave blank for immediate)</label>
+          <input type="date" name="offboardEffectiveDate" id="offboard-date" />
+        </div>
+        <div class="field" style="margin-bottom: 14px;">
+          <label>Reason / Audit Note</label>
+          <input type="text" name="reason" placeholder="e.g. Resignation, Contract End" />
+        </div>
+        <div style="margin-top: 20px; display:flex; gap:12px; justify-content:flex-end">
+          <button type="button" class="btn btn-outline" onclick="closeOffboard()">Cancel</button>
+          <button type="submit" class="btn btn-primary" style="background:#dc2626; border-color:#dc2626;">Confirm Offboarding</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script>
     const STAFF = ${JSON.stringify(staff)};
 
@@ -541,6 +566,21 @@ export const dashboardPage = (user: { email: string; firstName: string }, staff:
 
     function closeEdit() {
       document.getElementById('edit-modal').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    function openOffboard(id, name, email) {
+      const form = document.getElementById('offboard-form');
+      form.action = '/staff/delete/' + id;
+      document.getElementById('offboard-staff-name').textContent = name;
+      document.getElementById('offboard-staff-email').textContent = email;
+      document.getElementById('offboard-date').value = '';
+      document.getElementById('offboard-modal').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeOffboard() {
+      document.getElementById('offboard-modal').classList.remove('open');
       document.body.style.overflow = '';
     }
 
